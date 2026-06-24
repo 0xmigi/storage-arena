@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f5f4f1;        /* warm off-white */
+  --ink: #1b1b19;       /* near-black, not pitch */
+  --muted: #76746d;     /* secondary text */
+  --line: #e3e1db;      /* hairline */
+  --track: rgba(27, 27, 25, 0.08);
+  --accent: #3a5bd9;    /* single restrained accent */
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* definition text fades in as its box widens → masks the reflow */
+@keyframes fadein {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.fadein {
+  animation: fadein 0.45s ease both;
+}
+
+/* calm monochrome sweep over an active bar */
+@keyframes sweep {
+  from { background-position: -140px 0; }
+  to { background-position: 320px 0; }
+}
+.bar-running {
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.45),
+    transparent
+  );
+  background-size: 140px 100%;
+  background-repeat: no-repeat;
+  animation: sweep 1.1s linear infinite;
+}
