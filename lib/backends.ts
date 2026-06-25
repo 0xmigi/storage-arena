@@ -16,10 +16,21 @@ export interface Stage {
   scalesWithSize?: boolean;
 }
 
+// Where a backend's real artifact lands, and how to back-reference it on its
+// home chain. `stageKey` ties the receipt to the stage where it's created, so
+// opening that definition reveals the actual thing that happened.
+export interface Receipt {
+  stageKey: string;
+  chain: string; // "Solana devnet", "Sui testnet", "IPFS network", "Cloudflare R2"
+  verb: string; // what the id IS — "Tape account", "Blob", "CID", "Object key"
+  explorer?: (id: string) => string; // build a chain-explorer URL; omit for S3
+}
+
 export interface Backend {
   id: BackendId;
   name: string;
   blurb: string;
+  logo: string; // favicon URL (Google's favicon service)
   accent: string;
   mode: "live" | "modeled";
   decentralized: boolean;
@@ -28,6 +39,7 @@ export interface Backend {
   readSpeed: string;
   writeModel: string;
   success: string; // what counts as a "successful upload"
+  receipt: Receipt;
   stages: Stage[];
   baseMs: number;
   throughputMBs: number;
@@ -40,6 +52,7 @@ export const BACKENDS: Record<BackendId, Backend> = {
     id: "tapedrive",
     name: "Tapedrive",
     blurb: "Permanent storage anchored on Solana. Pay once, stored forever.",
+    logo: "https://www.google.com/s2/favicons?domain=tapedrive.io&sz=64",
     accent: "#9945FF",
     mode: "modeled",
     decentralized: true,
@@ -48,6 +61,12 @@ export const BACKENDS: Record<BackendId, Backend> = {
     readSpeed: "Fast from miners · slow if reconstructing from ledger",
     writeModel: "Ingest via Solana txs — 1 segment per ~893 bytes",
     success: "The tape is finalized on Solana — its commitment is on-chain and miners hold the data.",
+    receipt: {
+      stageKey: "anchor",
+      chain: "Solana devnet",
+      verb: "Tape account",
+      explorer: (a) => `https://explorer.solana.com/address/${a}?cluster=devnet`,
+    },
     baseMs: 1200,
     throughputMBs: 0.05,
     segmentBytes: 893,
@@ -88,6 +107,7 @@ export const BACKENDS: Record<BackendId, Backend> = {
     id: "walrus",
     name: "Walrus",
     blurb: "Erasure-coded blob storage on Sui. Fast write, decentralized.",
+    logo: "https://www.google.com/s2/favicons?domain=walrus.xyz&sz=64",
     accent: "#00C2FF",
     mode: "live",
     decentralized: true,
@@ -96,6 +116,12 @@ export const BACKENDS: Record<BackendId, Backend> = {
     readSpeed: "Fast (aggregator HTTP)",
     writeModel: "HTTP to publisher → erasure-coded to storage nodes",
     success: "An availability certificate is issued on Sui — a quorum of nodes has acknowledged holding their slivers.",
+    receipt: {
+      stageKey: "register",
+      chain: "Sui testnet",
+      verb: "Blob",
+      explorer: (id) => `https://walruscan.com/testnet/blob/${id}`,
+    },
     baseMs: 600,
     throughputMBs: 8,
     stages: [
@@ -127,6 +153,7 @@ export const BACKENDS: Record<BackendId, Backend> = {
     id: "ipfs",
     name: "IPFS",
     blurb: "Content-addressed P2P storage. Durable only while pinned.",
+    logo: "https://www.google.com/s2/favicons?domain=ipfs.tech&sz=64",
     accent: "#65C2CB",
     mode: "modeled",
     decentralized: true,
@@ -135,6 +162,12 @@ export const BACKENDS: Record<BackendId, Backend> = {
     readSpeed: "Gateway-variable (cache hit vs DHT lookup)",
     writeModel: "Local add → CID; pin to keep alive",
     success: "A CID exists and at least one node is pinning it — IPFS alone guarantees addressing, not persistence.",
+    receipt: {
+      stageKey: "announce",
+      chain: "IPFS network",
+      verb: "CID",
+      explorer: (cid) => `https://cid.ipfs.tech/#${cid}`,
+    },
     baseMs: 150,
     throughputMBs: 15,
     stages: [
@@ -166,6 +199,7 @@ export const BACKENDS: Record<BackendId, Backend> = {
     id: "s3",
     name: "AWS S3",
     blurb: "Centralized object storage. The fast, paid baseline.",
+    logo: "https://www.google.com/s2/favicons?domain=aws.amazon.com&sz=64",
     accent: "#FF9900",
     mode: "modeled",
     decentralized: false,
@@ -174,6 +208,12 @@ export const BACKENDS: Record<BackendId, Backend> = {
     readSpeed: "Fast (CDN-frontable)",
     writeModel: "Single HTTPS PUT to a bucket",
     success: "One company returns HTTP 200 — you trust their internal replication for durability.",
+    receipt: {
+      stageKey: "replicate",
+      chain: "Cloudflare R2",
+      verb: "Object key",
+      // No public ledger — the proof is the HTTP 200 and the object URL itself.
+    },
     baseMs: 90,
     throughputMBs: 25,
     stages: [

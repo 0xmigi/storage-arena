@@ -5,7 +5,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { randomUUID } from "crypto";
 import { BACKENDS, BackendId, projectMs, segmentCount } from "@/lib/backends";
-import { recordRun } from "@/lib/run-store";
+import { recordRun, recentRuns } from "@/lib/run-store";
 import { createJob, getJob, updateJob } from "@/lib/tape-jobs";
 
 export const runtime = "nodejs";
@@ -13,8 +13,21 @@ export const maxDuration = 120;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const MAX_BYTES = 2 * 1024 * 1024; // 2 MB cap
+// No strict per-file cap — cost is bounded by the R2 object-lifecycle delete
+// rule + the rate limit, NOT by file size. This high ceiling only exists to
+// avoid OOMing the dev server (each upload is buffered in memory, ×4 backends)
+// and to reject obvious abuse. Override with MAX_UPLOAD_MB.
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB ?? 2048);
+const MAX_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+// Tapedrive writes ~1 Solana tx per 893 bytes — a large file is hours of txs
+// and real devnet SOL. Above this, project the time instead of writing it.
+const TAPEDRIVE_MAX_MB = Number(process.env.TAPEDRIVE_MAX_MB ?? 10);
+const TAPEDRIVE_MAX_BYTES = TAPEDRIVE_MAX_MB * 1024 * 1024;
 const DEMO_CAP_MS = 9000; // how long a modeled lane visibly blocks
+// Rate limits — bound total storage/operation cost since there's no auth yet.
+const RATE_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const GLOBAL_HOURLY_CAP = 240; // ~60 races/hour across everyone
+const IP_HOURLY_CAP = 40; // ~10 races/hour per IP
 
 const WALRUS_PUBLISHER =
   process.env.WALRUS_PUBLISHER ?? "https://publisher.walrus-testnet.walrus.space";
@@ -55,7 +68,7 @@ async function doWalrus(bytes: Uint8Array): Promise<Result> {
   };
 }
 
-async function doTapedrive(bytes: Uint8Array): Promise<Result> {
+async function doTapedrive(bytes: Uint8Array, ip: string): Promise<Result> {
   const bin = process.env.TAPEDRIVE_BIN;
   const keypair = process.env.TAPEDRIVE_KEYPAIR;
   const projected = projectMs(BACKENDS.tapedrive, bytes.length);
@@ -64,6 +77,17 @@ async function doTapedrive(bytes: Uint8Array): Promise<Result> {
   if (!bin || !keypair) {
     await sleep(Math.min(projected, DEMO_CAP_MS));
     return { ms: projected, live: false, segments, note: "CLI not configured" };
+  }
+
+  // Above the feasibility threshold a real write is hours of Solana txs and
+  // real SOL — so we DON'T attempt it; we show the honest projection instead.
+  if (bytes.length > TAPEDRIVE_MAX_BYTES) {
+    return {
+      ms: projected,
+      live: false,
+      segments,
+      note: `> ${TAPEDRIVE_MAX_MB} MB — projected, not written (a real Solana write is ~${segments?.toLocaleString()} txs)`,
+    };
   }
 
   // A real photo is ~hundreds of transactions / minutes of work, so we DON'T
@@ -105,6 +129,7 @@ async function doTapedrive(bytes: Uint8Array): Promise<Result> {
         live: true,
         blobId: addr,
         blobUrl: `/api/blob/tapedrive/${addr}`,
+        ip,
       });
     } else {
       updateJob(jobId, { status: "failed", error: `write failed (exit ${code ?? "?"})` });
@@ -179,9 +204,26 @@ export async function POST(req: NextRequest) {
   const backend = BACKENDS[id];
   if (!backend) return NextResponse.json({ error: "unknown backend" }, { status: 400 });
 
+  const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "unknown";
+
+  // Rate limit (no auth yet) — keeps storage/op cost bounded.
+  const [globalCount, ipCount] = await Promise.all([
+    recentRuns(RATE_WINDOW_MS),
+    recentRuns(RATE_WINDOW_MS, ip),
+  ]);
+  if (globalCount >= GLOBAL_HOURLY_CAP || ipCount >= IP_HOURLY_CAP) {
+    return NextResponse.json(
+      { error: "rate limit reached — try again later" },
+      { status: 429 }
+    );
+  }
+
   const bytes = new Uint8Array(await req.arrayBuffer());
   if (bytes.length > MAX_BYTES) {
-    return NextResponse.json({ error: "file exceeds 2 MB cap" }, { status: 413 });
+    return NextResponse.json(
+      { error: `file exceeds ${MAX_UPLOAD_MB} MB limit` },
+      { status: 413 }
+    );
   }
   const rawName = req.headers.get("x-filename") ?? "upload.bin";
   let decodedName = "upload.bin";
@@ -196,7 +238,7 @@ export async function POST(req: NextRequest) {
   let r: Result;
   try {
     if (id === "walrus") r = await doWalrus(bytes);
-    else if (id === "tapedrive") r = await doTapedrive(bytes);
+    else if (id === "tapedrive") r = await doTapedrive(bytes, ip);
     else if (id === "s3") r = await doR2(bytes, name, contentType);
     else r = await doIpfs(bytes, name, contentType);
   } catch (e: any) {
@@ -226,6 +268,7 @@ export async function POST(req: NextRequest) {
     live: r.live,
     blobId: r.blobId ?? null,
     blobUrl: r.blobUrl ?? null,
+    ip,
   });
 
   return NextResponse.json({ backend: id, ok: true, ...r });

@@ -14,6 +14,7 @@ export async function GET(req: NextRequest) {
     status: job.status,
     ms: job.ms ?? null,
     segments: job.segments,
+    blobId: job.tapeAddr ?? null,
     blobUrl: job.tapeAddr ? `/api/blob/tapedrive/${job.tapeAddr}` : null,
     error: job.error ?? null,
   });

@@ -32,6 +32,39 @@ body {
   animation: fadein 0.45s ease both;
 }
 
+/* minimal monochrome range slider for the simulation size control */
+.arena-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--track);
+  outline: none;
+  cursor: pointer;
+}
+.arena-slider:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.arena-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--ink);
+  border: 2px solid var(--bg);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.arena-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--ink);
+  border: 2px solid var(--bg);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
 /* calm monochrome sweep over an active bar */
 @keyframes sweep {
   from { background-position: -140px 0; }

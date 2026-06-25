@@ -2,12 +2,36 @@
 
 import { useEffect, useRef, useState } from "react";
 import { animate } from "animejs";
-import { BACKENDS, BACKEND_ORDER, BackendId, projectMs, PHASES } from "@/lib/backends";
+import { BACKENDS, BACKEND_ORDER, BackendId, projectMs, segmentCount, PHASES } from "@/lib/backends";
 import { Close, Play, Plus, Upload } from "./Icons";
 import { Lane as LaneView } from "./Lane";
 
-const CAP_MS = 9000; // visual cap so slow lanes still resolve on screen
-const SIM_SIZE = 500_000; // nominal size for modeled fallback in simulation
+// setTimeout's signed-32-bit ceiling (~24.8 days). Past this a delay overflows
+// and fires immediately — so a lane longer than this just runs its real clock
+// and never auto-completes (honest: it really would take that long).
+const MAX_TIMEOUT = 2_147_483_000;
+
+// Simulation size range — log-scaled slider, 1 KB → 10 GB. Sizes beyond what's
+// actually been uploaded are reached by EXTRAPOLATING each network's linear fit
+// of its recorded runs (clearly labeled as extrapolation in the UI).
+const SIM_MIN = 1024;
+const SIM_MAX = 10 * 1024 * 1024 * 1024;
+const sliderToBytes = (t: number) => Math.round(SIM_MIN * Math.pow(SIM_MAX / SIM_MIN, t));
+const bytesToSlider = (b: number) =>
+  Math.log(b / SIM_MIN) / Math.log(SIM_MAX / SIM_MIN);
+const SIM_PRESETS: { label: string; bytes: number }[] = [
+  { label: "1 KB", bytes: 1024 },
+  { label: "1 MB", bytes: 1024 * 1024 },
+  { label: "100 MB", bytes: 100 * 1024 * 1024 },
+  { label: "1 GB", bytes: 1024 * 1024 * 1024 },
+  { label: "10 GB", bytes: 10 * 1024 * 1024 * 1024 },
+];
+function fmtSize(n: number) {
+  if (n < 1024) return `${Math.round(n)} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 * 1024 ? 2 : 1)} GB`;
+}
 
 type Status = "idle" | "running" | "done" | "error";
 interface Lane {
@@ -21,17 +45,16 @@ interface Lane {
   fellBack?: boolean;
   note?: string;
   readUrl?: string | null;
+  blobId?: string | null;
   segments?: number | null;
+  bytes?: number;
+  simTag?: string;
   error?: string;
 }
-type Avg = { avgMs: number; count: number };
-
 const idleLanes = () =>
   Object.fromEntries(
     BACKEND_ORDER.map((id) => [id, { status: "idle" } as Lane])
   ) as Record<BackendId, Lane>;
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function fmtBytes(n: number) {
   if (n < 1024) return `${n} B`;
@@ -39,35 +62,113 @@ function fmtBytes(n: number) {
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
 
+// A network's linear fit (ms ≈ intercept + slope·bytes) over its recorded runs.
+type Fit = {
+  slope: number | null;
+  intercept: number | null;
+  n: number;
+  minBytes: number;
+  maxBytes: number;
+  avgMs: number;
+};
+const SIZE_BAND = 4; // when a network has only one size cluster, its flat avg is
+// only trusted within this multiplicative window of the recorded size.
+// A linear fit can't be trusted indefinitely past its data — a ×512 stretch off
+// 2 points is noise. Beyond this many × past the measured max (or below the min)
+// we drop the extrapolation and use the model, so far sizes stay comparable.
+const MAX_EXTRAP = 10;
+// Extrapolation needs real evidence, not 2 noisy points. Below this many runs we
+// only INTERPOLATE within the measured range and otherwise use the model — so a
+// sparse, noisy fit never gets compared against modeled lanes and inverts them.
+const EXTRAP_MIN_N = 5;
+
+// Predict a network's time at `bytes`, plus an honest label of how it was
+// reached. ALWAYS returns an estimate — real recorded data is used when there's
+// enough of it (interpolated/extrapolated/avg), otherwise it falls back to the
+// hardcoded baseline model (`projectMs`, labeled "modeled"). The sim never dead-
+// ends: a missing fit just means we show the model instead of measured data.
+function predictSim(
+  fit: Fit | undefined,
+  bytes: number,
+  id: BackendId
+): { ms: number; tag: string } {
+  if (fit && fit.n >= 1) {
+    // A usable slope must be PHYSICALLY POSITIVE — a bigger file can't upload
+    // faster. A negative/zero slope means the data is overhead-dominated over
+    // too narrow a size range (e.g. Tapedrive's runs are all sub-5 KB), so the
+    // line is noise and must NOT be extrapolated ("10 GB in 1 ms").
+    const usableSlope =
+      fit.slope != null && fit.slope > 0 && fit.intercept != null && fit.maxBytes > fit.minBytes && fit.n >= 2;
+    if (usableSlope) {
+      const ms = Math.max(1, fit.intercept! + fit.slope! * bytes);
+      if (bytes >= fit.minBytes && bytes <= fit.maxBytes)
+        return { ms, tag: `interpolated · ${fit.n} runs` };
+      const f = bytes > fit.maxBytes ? bytes / fit.maxBytes : fit.minBytes / bytes;
+      if (fit.n >= EXTRAP_MIN_N && f <= MAX_EXTRAP)
+        return { ms, tag: `extrapolated ${fmtX(f)} · ${fit.n} runs` };
+      // too few points or too far past the data to trust — use the model below
+    }
+    // No usable slope (overhead-dominated / single size cluster) — trust the
+    // measured average only near where it was actually measured.
+    const near = bytes >= fit.minBytes / SIZE_BAND && bytes <= fit.maxBytes * SIZE_BAND;
+    if (near) return { ms: fit.avgMs, tag: `avg · ${fit.n} run${fit.n === 1 ? "" : "s"}` };
+  }
+  // Fallback — the hardcoded baseline model. Always sensible, clearly labeled
+  // "modeled" so it's never mistaken for measured data.
+  return { ms: projectMs(BACKENDS[id], bytes), tag: "modeled" };
+}
+function fmtX(f: number) {
+  if (f >= 1000) return `×${Math.round(f / 1000)}k`;
+  if (f >= 10) return `×${Math.round(f)}`;
+  return `×${f.toFixed(1)}`;
+}
+
 export default function Arena() {
   const [mode, setMode] = useState<"live" | "sim">("live");
+  const [simBytes, setSimBytes] = useState(1024 * 1024); // 1 MB default
   const [file, setFile] = useState<File | null>(null);
   const [running, setRunning] = useState(false);
   const [lanes, setLanes] = useState<Record<BackendId, Lane>>(idleLanes);
-  const [averages, setAverages] = useState<Partial<Record<BackendId, Avg>>>({});
+  const [fits, setFits] = useState<Partial<Record<BackendId, Fit>>>({});
   const [, setTick] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const [modal, setModal] = useState(false);
   const [polling, setPolling] = useState(false); // a background Tapedrive job is running
   const runGen = useRef(0); // invalidates stale polls when a new run starts
 
-  async function loadAverages() {
+  // Load each network's ms-vs-bytes fit over all recorded runs. Size-independent
+  // (we evaluate it at the slider size on the client), so we load once on mount
+  // and again after each live upload, as new runs sharpen the fit.
+  async function loadFits() {
     try {
-      const r = await fetch("/api/averages");
+      const r = await fetch("/api/fits");
       const j = await r.json();
-      const map: Partial<Record<BackendId, Avg>> = {};
-      for (const a of j.averages ?? [])
-        map[a.backend as BackendId] = { avgMs: a.avgMs, count: a.count };
-      setAverages(map);
+      const map: Partial<Record<BackendId, Fit>> = {};
+      for (const f of j.fits ?? [])
+        map[f.backend as BackendId] = {
+          slope: f.slope,
+          intercept: f.intercept,
+          n: f.n,
+          minBytes: f.minBytes,
+          maxBytes: f.maxBytes,
+          avgMs: f.avgMs,
+        };
+      setFits(map);
     } catch {}
   }
   useEffect(() => {
-    loadAverages();
+    loadFits();
   }, []);
 
-  // animate while a race is running OR a background Tapedrive job is polling
+  // Any lane still in flight — drives the ticker and the disabled state. A
+  // simulation runs at TRUE 1:1 wall-clock, so a slow lane can stay "running"
+  // for a very long time; we key off the lanes themselves, not a boolean.
+  const anyRunning = BACKEND_ORDER.some((id) => lanes[id].status === "running");
+  const busy = running || polling || anyRunning;
+
+  // animate while ANY lane is still moving (or a Tapedrive job is polling)
   useEffect(() => {
-    if (!running && !polling) return;
+    if (!busy) return;
     let raf = 0;
     const loop = () => {
       setTick((t) => t + 1);
@@ -75,7 +176,7 @@ export default function Arena() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [running, polling]);
+  }, [busy]);
 
   // poll a background Tapedrive write until it finishes
   function pollTape(id: BackendId, jobId: string, gen: number) {
@@ -88,10 +189,10 @@ export default function Arena() {
         if (j.status === "done") {
           setLanes((p) => ({
             ...p,
-            [id]: { ...p[id], status: "done", reportedMs: j.ms, live: true, readUrl: j.blobUrl, segments: j.segments },
+            [id]: { ...p[id], status: "done", reportedMs: j.ms, live: true, readUrl: j.blobUrl, blobId: j.blobId, segments: j.segments },
           }));
           setPolling(false);
-          loadAverages();
+          loadFits(); // Tapedrive's just-finished write now sharpens its fit
           return;
         }
         if (j.status === "failed" || j.status === "unknown") {
@@ -118,14 +219,16 @@ export default function Arena() {
   }
 
   async function runLive() {
-    if (!file || running) return;
+    if (!file || busy) return;
     runGen.current++;
     const gen = runGen.current;
     setPolling(false);
     setRunning(true);
     const size = file.size;
+    // Uncapped — the bar paces against the real projected duration and snaps
+    // to the actual elapsed time when each upload truly lands.
     const targets = Object.fromEntries(
-      BACKEND_ORDER.map((id) => [id, Math.min(projectMs(BACKENDS[id], size), CAP_MS)])
+      BACKEND_ORDER.map((id) => [id, projectMs(BACKENDS[id], size)])
     ) as Record<BackendId, number>;
     startLanes(targets);
 
@@ -169,6 +272,7 @@ export default function Arena() {
               fellBack: json.fellBack,
               note: json.note,
               readUrl: json.blobUrl,
+              blobId: json.blobId ?? null,
               segments: json.segments ?? null,
             },
           }));
@@ -181,47 +285,99 @@ export default function Arena() {
       })
     );
     setRunning(false);
-    loadAverages();
+    loadFits(); // the runs we just recorded now sharpen the fits
   }
 
   async function runSim() {
-    if (running) return;
+    if (busy) return;
     runGen.current++;
+    const gen = runGen.current;
     setPolling(false);
-    setRunning(true);
-    const real = (id: BackendId) =>
-      averages[id]?.avgMs ?? projectMs(BACKENDS[id], SIM_SIZE);
-    const targets = Object.fromEntries(
-      BACKEND_ORDER.map((id) => [id, Math.min(real(id), CAP_MS)])
-    ) as Record<BackendId, number>;
-    startLanes(targets);
+    setRunning(false);
 
-    await Promise.all(
-      BACKEND_ORDER.map(async (id) => {
-        await sleep(targets[id]);
-        setLanes((p) => ({
-          ...p,
+    // The simulation IS the crowd data, extrapolated: each lane replays its
+    // network's linear fit (over real recorded runs) evaluated at this size.
+    // Fetch fresh so it reflects every upload so far. Plays at TRUE 1:1
+    // wall-clock — nothing faked; the number is derived from measured runs and
+    // labeled (interpolated / extrapolated ×N). A network without enough size
+    // spread to extrapolate honestly shows nothing rather than a wrong number.
+    let freshFits: Partial<Record<BackendId, Fit>> = {};
+    try {
+      const r = await fetch("/api/fits");
+      const j = await r.json();
+      for (const f of j.fits ?? [])
+        freshFits[f.backend as BackendId] = {
+          slope: f.slope,
+          intercept: f.intercept,
+          n: f.n,
+          minBytes: f.minBytes,
+          maxBytes: f.maxBytes,
+          avgMs: f.avgMs,
+        };
+    } catch {}
+    if (gen !== runGen.current) return; // reset/newer run during the fetch
+    setFits(freshFits);
+
+    const preds = Object.fromEntries(
+      BACKEND_ORDER.map((id) => [id, predictSim(freshFits[id], simBytes, id)])
+    ) as Record<BackendId, { ms: number; tag: string }>;
+
+    const now = Date.now();
+    const fresh = idleLanes();
+    BACKEND_ORDER.forEach((id) => {
+      const p = preds[id]; // never null — predictSim always returns an estimate
+      fresh[id] = {
+        status: "running",
+        startedAt: now,
+        targetWall: p.ms,
+        sim: true,
+        simTag: p.tag,
+        count: freshFits[id]?.n ?? 0,
+        bytes: simBytes,
+      };
+    });
+    setLanes(fresh);
+
+    // Each lane finishes exactly when its predicted time elapses — real time.
+    BACKEND_ORDER.forEach((id) => {
+      const p = preds[id];
+      if (p.ms > MAX_TIMEOUT) return;
+      setTimeout(() => {
+        if (gen !== runGen.current) return; // a newer run / reset superseded this
+        setLanes((prev) => ({
+          ...prev,
           [id]: {
-            ...p[id],
+            ...prev[id],
             status: "done",
-            reportedMs: real(id),
+            reportedMs: p.ms,
             sim: true,
-            count: averages[id]?.count ?? 0,
+            count: freshFits[id]?.n ?? 0,
+            bytes: simBytes,
+            simTag: p.tag,
+            segments: segmentCount(BACKENDS[id], simBytes),
           },
         }));
-      })
-    );
-    setRunning(false);
+      }, p.ms);
+    });
   }
 
   function reset() {
-    runGen.current++;
+    runGen.current++; // invalidates any in-flight sim timers and Tapedrive polls
     setPolling(false);
+    setRunning(false);
     setFile(null);
     setLanes(idleLanes());
   }
 
   const fileSize = file?.size ?? 0;
+  // Total runs feeding the fits + the measured size range — drives the honest
+  // "fit from N runs measured X–Y" readout under the slider.
+  const fitRuns = BACKEND_ORDER.reduce((s, id) => s + (fits[id]?.n ?? 0), 0);
+  const fitSizes = BACKEND_ORDER.flatMap((id) =>
+    fits[id]?.n ? [fits[id]!.minBytes, fits[id]!.maxBytes] : []
+  );
+  const fitMin = fitSizes.length ? Math.min(...fitSizes) : 0;
+  const fitMax = fitSizes.length ? Math.max(...fitSizes) : 0;
   const doneMs = BACKEND_ORDER.map((id) => lanes[id])
     .filter((l) => l.status === "done" && l.reportedMs != null)
     .map((l) => l.reportedMs!);
@@ -234,8 +390,8 @@ export default function Arena() {
         {(["live", "sim"] as const).map((m) => (
           <button
             key={m}
-            onClick={() => !running && setMode(m)}
-            disabled={running}
+            onClick={() => !busy && setMode(m)}
+            disabled={busy}
             className={`rounded-md px-3 py-1.5 transition-colors disabled:opacity-50 ${
               mode === m ? "bg-ink text-bg" : "text-muted hover:text-ink"
             }`}
@@ -259,61 +415,109 @@ export default function Arena() {
             const f = e.dataTransfer.files?.[0];
             if (f) setFile(f);
           }}
-          className={`flex flex-col gap-3 rounded-lg border px-4 py-3 transition-colors sm:flex-row sm:items-center sm:gap-4 ${
-            dragOver ? "border-ink/40 bg-ink/[0.02]" : "border-line"
+          className={`rounded-lg border px-4 py-3 transition-colors ${
+            dragOver ? "border-ink/40 bg-ink/[0.04]" : "border-line bg-bg"
           }`}
         >
-          <label className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-md border border-line bg-white/60 px-3 py-1.5 text-sm hover:border-ink/30">
-            <Upload size={15} />
-            Choose file
-            <input
-              type="file"
-              className="hidden"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            />
-          </label>
-          <div className="min-w-0 truncate text-sm text-muted">
-            {file ? (
-              <>
-                <span className="text-ink">{file.name}</span> · {fmtBytes(fileSize)}
-              </>
-            ) : (
-              "Drop a file here to send it to all four at once."
-            )}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+            <label className="inline-flex w-fit shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap rounded-md border border-line bg-white px-3 py-1.5 text-sm hover:border-ink/30">
+              <Upload size={15} />
+              Choose file
+              <input
+                type="file"
+                className="hidden"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            <div className="min-w-0 truncate text-sm text-muted">
+              {file ? (
+                <>
+                  <span className="text-ink">{file.name}</span> · {fmtBytes(fileSize)}
+                </>
+              ) : (
+                "Drop a file here to send it to every network at once."
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-2 sm:ml-auto">
+              <button
+                onClick={runLive}
+                disabled={!file || busy}
+                className="whitespace-nowrap rounded-md bg-ink px-4 py-1.5 text-sm font-medium text-bg disabled:opacity-30"
+              >
+                {busy ? "Running…" : "Enter the arena"}
+              </button>
+              <button
+                onClick={reset}
+                className="rounded-md px-3 py-1.5 text-sm text-muted hover:text-ink"
+              >
+                Reset
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-2 sm:ml-auto">
-            <button
-              onClick={runLive}
-              disabled={!file || running}
-              className="rounded-md bg-ink px-4 py-1.5 text-sm font-medium text-bg disabled:opacity-30"
-            >
-              {running ? "Running…" : "Enter the arena"}
-            </button>
-            <button
-              onClick={reset}
-              disabled={running}
-              className="rounded-md px-3 py-1.5 text-sm text-muted hover:text-ink disabled:opacity-30"
-            >
-              Reset
-            </button>
+          {/* honest size note — no hard cap, but big files strain some networks */}
+          <div className="mt-2.5 text-[11px] text-muted">
+            No size limit — but files over ~10&nbsp;MB may fail on some networks.
           </div>
         </div>
       ) : (
-        <div className="flex flex-col gap-3 rounded-lg border border-line px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
-          <div className="text-sm text-muted">
-            Replays the{" "}
-            <span className="text-ink">average of every real run</span> — no
-            upload needed.
-          </div>
-          <div className="sm:ml-auto">
+        <div className="flex flex-col gap-4 rounded-lg border border-line bg-bg px-4 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm text-muted">
+              Extrapolates each network&apos;s recorded runs to{" "}
+              <span className="tnum font-mono text-ink">{fmtSize(simBytes)}</span>,
+              replayed in real time.
+            </div>
             <button
-              onClick={runSim}
-              disabled={running}
-              className="inline-flex items-center gap-2 rounded-md bg-ink px-4 py-1.5 text-sm font-medium text-bg disabled:opacity-30"
+              onClick={busy ? reset : runSim}
+              className="inline-flex shrink-0 items-center gap-2 rounded-md bg-ink px-4 py-1.5 text-sm font-medium text-bg"
             >
-              <Play size={14} />
-              {running ? "Running…" : "Run simulation"}
+              {busy ? <Close size={14} /> : <Play size={14} />}
+              {busy ? "Stop" : "Run simulation"}
             </button>
+          </div>
+          {/* log-scaled size slider — 1 KB to 10 GB */}
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.001}
+            value={bytesToSlider(simBytes)}
+            onChange={(e) => !busy && setSimBytes(sliderToBytes(Number(e.target.value)))}
+            disabled={busy}
+            className="arena-slider w-full"
+            aria-label="Simulated file size"
+          />
+          <div className="flex flex-wrap items-center gap-1.5">
+            {SIM_PRESETS.map((p) => {
+              const active = Math.abs(simBytes - p.bytes) / p.bytes < 0.02;
+              return (
+                <button
+                  key={p.label}
+                  onClick={() => !busy && setSimBytes(p.bytes)}
+                  disabled={busy}
+                  className={`rounded-md border px-2.5 py-1 text-xs transition-colors disabled:opacity-40 ${
+                    active
+                      ? "border-ink/40 bg-ink/[0.04] text-ink"
+                      : "border-line text-muted hover:border-ink/30 hover:text-ink"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+          </div>
+          {/* honest data-availability readout — the sim is only as good as the
+              runs recorded near this size */}
+          <div className="text-[11px] text-muted">
+            {fitRuns > 0 ? (
+              <>
+                Fit from <span className="text-ink">{fitRuns}</span> recorded run
+                {fitRuns === 1 ? "" : "s"}, measured {fmtSize(fitMin)}–{fmtSize(fitMax)}.
+                Beyond that range is extrapolated.
+              </>
+            ) : (
+              "No runs recorded yet — run a live upload to seed the fit."
+            )}
           </div>
         </div>
       )}
@@ -329,8 +533,8 @@ export default function Arena() {
         ))}
       </div>
 
-      {/* lanes */}
-      <div className="mt-3 border-t border-line">
+      {/* lanes — each network is its own off-white panel inside the white card */}
+      <div className="mt-3 space-y-2.5">
         {BACKEND_ORDER.map((id) => (
           <LaneView key={id} backend={BACKENDS[id]} lane={lanes[id]} fastest={fastest} />
         ))}

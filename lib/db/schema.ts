@@ -18,6 +18,7 @@ export const runs = pgTable("runs", {
   blobId: text("blob_id"),
   blobUrl: text("blob_url"), // public, shareable retrieval URL
   userId: text("user_id"), // null until auth is wired
+  ip: text("ip"), // for rate limiting
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

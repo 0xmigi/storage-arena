@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Backend, phaseColor, stageRanges } from "@/lib/backends";
+import { Backend, Receipt as ReceiptT, phaseColor, stageRanges } from "@/lib/backends";
 import { ArrowUpRight, Check, Link } from "./Icons";
 import { StageIcon } from "./StageIcon";
 
@@ -16,7 +16,10 @@ export interface LaneState {
   note?: string;
   error?: string;
   readUrl?: string | null;
+  blobId?: string | null;
   segments?: number | null;
+  bytes?: number;
+  simTag?: string;
 }
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
@@ -29,7 +32,23 @@ function hexA(hex: string, a: number) {
 }
 function fmtMs(ms: number) {
   if (ms < 1000) return `${Math.round(ms)} ms`;
-  return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(s < 10 ? 2 : 1)} s`;
+  const m = s / 60;
+  if (m < 60) return `${m.toFixed(m < 10 ? 1 : 0)} min`;
+  const h = m / 60;
+  if (h < 24) return `${h.toFixed(h < 10 ? 1 : 0)} h`;
+  return `${(h / 24).toFixed(h / 24 < 10 ? 1 : 0)} d`;
+}
+function fmtSize(n: number) {
+  if (n < 1024) return `${Math.round(n)} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 * 1024 ? 2 : 1)} GB`;
+}
+// Shorten a long chain id for display: 7xQ…9fk
+function shortId(id: string) {
+  return id.length > 16 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id;
 }
 
 export function Lane({
@@ -63,11 +82,25 @@ export function Lane({
   const toggle = (key: string) => setOpen((o) => (o === key ? null : key));
 
   return (
-    <div className="border-b border-line py-5">
+    <div className="rounded-xl bg-bg px-4 py-4 sm:px-5">
       {/* header */}
       <div className="flex items-end justify-between gap-3">
         <div className="flex items-center gap-2.5">
-          <span className="font-medium">{backend.name}</span>
+          <span className="flex items-center gap-2">
+            {/* network favicon (Google's service); hidden if it fails to load */}
+            <img
+              src={backend.logo}
+              alt=""
+              width={18}
+              height={18}
+              loading="lazy"
+              className="rounded-sm"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.display = "none";
+              }}
+            />
+            <span className="font-medium">{backend.name}</span>
+          </span>
           {current ? (
             <span className="text-[12px]" style={{ color: phaseColor(current.key) }}>
               {current.label}…
@@ -77,6 +110,13 @@ export function Lane({
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* while a sim lane crawls in real time, show its projected total so a
+              long extrapolation (e.g. 10 GB) is legible without waiting hours */}
+          {lane.status === "running" && lane.sim && lane.targetWall != null && (
+            <span className="tnum font-mono text-[11px] text-muted">
+              proj. {fmtMs(lane.targetWall)}
+            </span>
+          )}
           <span className="tnum font-mono text-xl">
             {lane.status === "idle" ? "—" : lane.status === "error" ? "err" : fmtMs(timerMs)}
           </span>
@@ -154,7 +194,7 @@ export function Lane({
       >
         <div className="min-h-0 overflow-hidden">
           {open !== null && (
-            <div className="mt-1.5 flex items-stretch gap-1.5" style={{ height: 112 }}>
+            <div className="mt-1.5 flex items-stretch gap-1.5" style={{ height: 138 }}>
               {ranges.map((r) => {
                 const isOpen = open === r.key;
                 const color = phaseColor(r.key);
@@ -187,6 +227,18 @@ export function Lane({
                         {r.label}
                       </span>
                       <span className="mt-1 block text-[12px] leading-relaxed text-muted">{r.why}</span>
+                      {/* the real artifact this step produced — opens a back-
+                          reference to the chain it actually landed on */}
+                      {r.key === backend.receipt.stageKey &&
+                        lane.live &&
+                        lane.blobId && (
+                          <Receipt
+                            receipt={backend.receipt}
+                            id={lane.blobId}
+                            readUrl={lane.readUrl}
+                            color={color}
+                          />
+                        )}
                     </span>
                   </button>
                 );
@@ -220,13 +272,56 @@ function StatusTag({ lane, winner }: { lane: LaneState; winner: boolean }) {
           live upload
         </>
       ) : lane.sim ? (
-        lane.count ? `avg of ${lane.count} run${lane.count === 1 ? "" : "s"}` : "no runs yet"
+        `${lane.simTag ?? "modeled"}${lane.bytes != null ? ` · ${fmtSize(lane.bytes)}` : ""}`
       ) : lane.status === "done" ? (
         "modeled"
       ) : (
         ""
       )}
       {winner && <span className="text-ink">· fastest</span>}
+    </span>
+  );
+}
+
+// The real, verifiable thing the upload produced — a back-reference to the
+// chain (or store) it landed on. Links out to a block explorer where one exists.
+function Receipt({
+  receipt,
+  id,
+  readUrl,
+  color,
+}: {
+  receipt: ReceiptT;
+  id: string;
+  readUrl?: string | null;
+  color: string;
+}) {
+  const href = receipt.explorer ? receipt.explorer(id) : readUrl ?? null;
+  return (
+    <span className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-t border-line pt-2 text-[11px]">
+      <span className="font-medium" style={{ color }}>
+        {receipt.chain}
+      </span>
+      <span className="text-muted">{receipt.verb}</span>
+      <span className="tnum font-mono text-ink" title={id}>
+        {shortId(id)}
+      </span>
+      {href && (
+        // a span (not <a>/<button>) because this lives inside the stage button;
+        // stopPropagation so opening the explorer doesn't collapse the panel
+        <span
+          role="link"
+          tabIndex={0}
+          title={receipt.explorer ? "view on explorer" : "view object"}
+          onClick={(e) => {
+            e.stopPropagation();
+            window.open(href, "_blank", "noopener,noreferrer");
+          }}
+          className="inline-flex cursor-pointer items-center text-muted hover:text-ink"
+        >
+          <ArrowUpRight size={12} />
+        </span>
+      )}
     </span>
   );
 }
