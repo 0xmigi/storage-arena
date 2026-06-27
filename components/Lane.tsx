@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Backend, Receipt as ReceiptT, phaseColor, stageRanges } from "@/lib/backends";
+import { priceUsd, fmtPrice } from "@/lib/pricing";
 import { ArrowUpRight, Check, Link } from "./Icons";
 import { StageIcon } from "./StageIcon";
 
@@ -81,8 +82,13 @@ export function Lane({
 
   const toggle = (key: string) => setOpen((o) => (o === key ? null : key));
 
+  // What this upload costs, in the network's native model (one-time vs monthly).
+  // Only once we know the size — sim lanes carry it; live lanes get it on done.
+  const price =
+    lane.status === "done" && lane.bytes != null ? priceUsd(backend, lane.bytes) : null;
+
   return (
-    <div className="rounded-xl bg-bg px-4 py-4 sm:px-5">
+    <div className="rounded-xl bg-bg px-3 py-4 sm:px-5">
       {/* header */}
       <div className="flex items-end justify-between gap-3">
         <div className="flex items-center gap-2.5">
@@ -251,6 +257,11 @@ export function Lane({
       {/* meta */}
       <div className="mt-2 flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
         <StatusTag lane={lane} winner={isWinner} />
+        {price && (
+          <span className="font-medium text-ink" title="estimated cost to store this file">
+            · {fmtPrice(price)}
+          </span>
+        )}
         {lane.segments != null && <span>· {lane.segments.toLocaleString()} txs</span>}
         {lane.note && <span className="text-accent">· {lane.note}</span>}
         {lane.error && <span className="text-red-500">· {lane.error}</span>}

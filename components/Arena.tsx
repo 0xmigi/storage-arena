@@ -256,6 +256,7 @@ export default function Arena() {
                 startedAt: Date.now(),
                 targetWall: json.projected || p[id].targetWall,
                 segments: json.segments ?? null,
+                bytes: size,
               },
             }));
             setPolling(true);
@@ -274,6 +275,7 @@ export default function Arena() {
               readUrl: json.blobUrl,
               blobId: json.blobId ?? null,
               segments: json.segments ?? null,
+              bytes: size,
             },
           }));
         } catch (e: any) {

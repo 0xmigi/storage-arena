@@ -261,19 +261,19 @@ export const PHASES: { key: Phase; label: string; color: string; desc: string }[
   {
     key: "prepare",
     label: "Prepare",
-    color: "#5b6ee1",
+    color: "#2f62ea",
     desc: "Transform the file into a storable form — chunk, hash, or erasure-code it.",
   },
   {
     key: "transmit",
     label: "Transmit",
-    color: "#1ba39c",
+    color: "#8a2be2",
     desc: "Move the actual bytes to wherever they'll live.",
   },
   {
     key: "commit",
     label: "Commit",
-    color: "#d98a2b",
+    color: "#f26a1b",
     desc: "Make it durable and official — the moment the upload truly counts.",
   },
 ];
