@@ -28,15 +28,15 @@ export default function Home() {
       </div>
       <Compare />
       <Faq />
-      <footer className="mt-10 border-t border-line pt-6 text-center text-[12px] text-muted sm:mt-12">
-        A tool from{" "}
+      <footer className="mt-20 text-center text-[12px] text-muted sm:mt-24">
+        Developed as research for{" "}
         <a
-          href="https://moment.xyz"
+          href="https://mmoment.xyz"
           target="_blank"
           rel="noreferrer"
           className="font-medium text-ink underline-offset-2 hover:underline"
         >
-          moment.xyz
+          mmoment.xyz
         </a>
       </footer>
     </main>
