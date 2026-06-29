@@ -35,9 +35,9 @@ export const COMPARE: CompareSection[] = [
     key: "cost",
     title: "Cost",
     cells: {
-      tapedrive: ["Pay once", "One write fee, then free to read forever"],
+      tapedrive: ["Pay once", "One upfront payment in TAPE; no egress fees"],
       walrus: ["$0.023/GB-mo", "USD-pegged, same as S3 — and no egress fees"],
-      ipfs: ["~$0.07/GB-mo", "Set by your pinning service — ~$0.005–0.15 + bandwidth"],
+      ipfs: ["Provider-set", "~$0.005–0.15/GB-mo across pinning services, plus bandwidth"],
       s3: ["$0.023/GB-mo", "Cheap to store, $0.09/GB to read out"],
     },
   },
@@ -45,7 +45,7 @@ export const COMPARE: CompareSection[] = [
     key: "readspeed",
     title: "Read speed",
     cells: {
-      tapedrive: ["Fast from miners", "Slow fallback if rebuilt from the Solana ledger"],
+      tapedrive: ["Fast", "Served over HTTP from a gateway, slice-cached"],
       walrus: ["Fast", "Served over HTTP from aggregator nodes"],
       ipfs: ["Variable", "Instant on a cache hit, slow on a cold DHT lookup"],
       s3: ["Fast", "Low-latency reads, CDN-frontable for more"],
@@ -55,7 +55,7 @@ export const COMPARE: CompareSection[] = [
     key: "maxsize",
     title: "Max file size",
     cells: {
-      tapedrive: ["No hard cap", "But every ~893 B is its own Solana tx — big files get slow & costly"],
+      tapedrive: ["~4.4 TB/tape", "Up to 65,535 tracks of 64 MB each per tape"],
       walrus: ["Large blobs", "Multi-GB blobs, erasure-coded across nodes"],
       ipfs: ["Effectively unbounded", "Chunked into a block DAG; size just means more blocks"],
       s3: ["Up to 5 TB", "Per object; multipart upload required above 5 GB"],
@@ -66,7 +66,7 @@ export const COMPARE: CompareSection[] = [
     title: "Maturity & track record",
     cells: {
       tapedrive: ["Unproven", "Pre-launch, no production track record yet"],
-      walrus: ["Mainnet since 2025", ">1 PB stored, but young in production"],
+      walrus: ["Mainnet since 2025", "Live on Sui, but still early in production"],
       ipfs: ["Live since 2015", "Mature, widely deployed protocol"],
       s3: ["Live since 2006", "Exabyte-scale, the industry baseline"],
     },
@@ -75,7 +75,7 @@ export const COMPARE: CompareSection[] = [
     key: "durability",
     title: "Durability",
     cells: {
-      tapedrive: ["Miner-incentivized", "Proof-of-access pays miners to keep holding the bytes"],
+      tapedrive: ["10-of-20 erasure", "Any 10 of 20 shards rebuild it; nodes forfeit rewards (not stake) for dropping data"],
       walrus: ["Erasure-coded", "Rebuildable even if a large fraction of nodes vanish"],
       ipfs: ["Pin-dependent", "Only as durable as the nodes choosing to pin it"],
       s3: ["11 nines", "99.999999999% designed durability across data centers"],
@@ -95,7 +95,7 @@ export const COMPARE: CompareSection[] = [
     key: "permanence",
     title: "Permanence",
     cells: {
-      tapedrive: ["Permanent", "Stored for good after a single payment"],
+      tapedrive: ["Prepaid term", "One upfront payment reserves a fixed epoch term"],
       walrus: ["Leased", "2-week epochs you renew to keep it alive"],
       ipfs: ["While pinned", "Garbage-collected once nobody pins it"],
       s3: ["While you pay", "Deleted as soon as you stop paying"],
@@ -105,7 +105,7 @@ export const COMPARE: CompareSection[] = [
     key: "verifiability",
     title: "Proof it's stored",
     cells: {
-      tapedrive: ["Proof-of-access", "Miners cryptographically prove custody"],
+      tapedrive: ["Cert on Solana", "A 14-of-20 node committee BLS-signs custody each epoch"],
       walrus: ["Cert on Sui", "Availability certificate, quorum-signed"],
       ipfs: ["Content hash", "Verifies the bytes, not that anyone holds them"],
       s3: ["None", "No cryptographic proof — you trust Amazon's word"],
@@ -115,7 +115,7 @@ export const COMPARE: CompareSection[] = [
     key: "delete",
     title: "Who can delete it",
     cells: {
-      tapedrive: ["No one", "Immutable the moment it's written"],
+      tapedrive: ["Owner", "The tape authority can delete tracks; expired tapes are reclaimable"],
       walrus: ["Auto-expires", "When the lease ends; no manual delete"],
       ipfs: ["Any pinner", "Gone once every node drops it"],
       s3: ["Amazon or you", "Account action or a court order"],
@@ -145,8 +145,8 @@ export const COMPARE: CompareSection[] = [
     key: "decentralization",
     title: "Decentralization",
     cells: {
-      tapedrive: ["Miners", "Independent miners, anchored on Solana"],
-      walrus: ["~100 nodes", "Erasure-coded across 19 countries"],
+      tapedrive: ["Staked nodes", "Independent operators stake TAPE, anchored on Solana"],
+      walrus: ["Independent nodes", "Erasure-coded across independent staking operators"],
       ipfs: ["P2P nodes", "Open network, persistence via pinning"],
       s3: ["Amazon only", "One operator, many regions"],
     },

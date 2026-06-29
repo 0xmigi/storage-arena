@@ -10,7 +10,7 @@ export default function Home() {
           Storage Arena
         </div>
         <h1 className="text-3xl font-semibold tracking-tight sm:text-[2.5rem] sm:leading-[1.1]">
-          Storage network benchmark
+          Live benchmark top storage networks
         </h1>
         {/* full value-prop on desktop; hidden on mobile so the upload bars sit
             higher and need less scrolling */}
