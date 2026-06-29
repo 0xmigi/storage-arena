@@ -40,12 +40,6 @@ function fmtMs(ms: number) {
   if (h < 24) return `${h.toFixed(h < 10 ? 1 : 0)} h`;
   return `${(h / 24).toFixed(h / 24 < 10 ? 1 : 0)} d`;
 }
-function fmtSize(n: number) {
-  if (n < 1024) return `${Math.round(n)} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 * 1024 ? 2 : 1)} GB`;
-}
 // Shorten a long chain id for display: 7xQ…9fk
 function shortId(id: string) {
   return id.length > 16 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id;
@@ -82,7 +76,7 @@ export function Lane({
   const toggle = (key: string) => setOpen((o) => (o === key ? null : key));
 
   return (
-    <div className="rounded-xl bg-bg px-3 py-4 sm:px-5">
+    <div className="rounded-xl bg-bg px-3 py-3 sm:px-5 sm:py-4">
       {/* header */}
       <div className="flex items-end justify-between gap-3">
         <div className="flex items-center gap-2.5">
@@ -102,7 +96,7 @@ export function Lane({
             <span className="font-medium">{backend.name}</span>
           </span>
           {current ? (
-            <span className="text-[12px]" style={{ color: phaseColor(current.key) }}>
+            <span className="hidden text-[12px] sm:inline" style={{ color: phaseColor(current.key) }}>
               {current.label}…
             </span>
           ) : (
@@ -113,11 +107,11 @@ export function Lane({
           {/* while a sim lane crawls in real time, show its projected total so a
               long extrapolation (e.g. 10 GB) is legible without waiting hours */}
           {lane.status === "running" && lane.sim && lane.targetWall != null && (
-            <span className="tnum font-mono text-[11px] text-muted">
+            <span className="tnum whitespace-nowrap font-mono text-[11px] text-muted">
               proj. {fmtMs(lane.targetWall)}
             </span>
           )}
-          <span className="tnum font-mono text-xl">
+          <span className="tnum whitespace-nowrap font-mono text-xl">
             {lane.status === "idle" ? "—" : lane.status === "error" ? "err" : fmtMs(timerMs)}
           </span>
           {lane.readUrl && <ShareLink url={lane.readUrl} />}
@@ -165,12 +159,12 @@ export function Lane({
               key={r.key}
               type="button"
               onClick={() => toggle(r.key)}
-              style={{ flexGrow: r.weight, flexBasis: 0 }}
-              className="flex items-center gap-1 pt-1 text-left"
+              style={{ flexGrow: r.weight, flexBasis: 0, minWidth: 0 }}
+              className="flex min-w-0 items-center gap-1 pt-1 text-left"
             >
               <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: color }} />
               <span
-                className="truncate text-[10px]"
+                className="min-w-0 flex-1 truncate text-[10px]"
                 style={{ color: active ? color : "var(--muted)" }}
                 title={r.label}
               >
@@ -182,9 +176,8 @@ export function Lane({
       </div>
 
       {/* the icons + definitions are deeper info — only revealed once a network
-          is opened. Expands smoothly via CSS grid; fixed height inside so it
-          never resizes vertically, and the text is always rendered (opacity
-          crossfade) so switching steps never remounts/flashes. */}
+          is opened. Expands via CSS grid; collapsed steps are icon-only so the
+          panel height hugs the open definition (and wraps on narrow screens). */}
       <div
         className="grid"
         style={{
@@ -194,7 +187,7 @@ export function Lane({
       >
         <div className="min-h-0 overflow-hidden">
           {open !== null && (
-            <div className="mt-1.5 flex items-stretch gap-1.5" style={{ height: 138 }}>
+            <div className="mt-1.5 flex items-stretch gap-1.5">
               {ranges.map((r) => {
                 const isOpen = open === r.key;
                 const color = phaseColor(r.key);
@@ -218,20 +211,18 @@ export function Lane({
                     <span className="shrink-0" style={{ color }}>
                       <StageIcon name={r.icon} size={18} />
                     </span>
-                    {/* fixed-width text → never reflows; opacity crossfades on switch */}
-                    <span
-                      className="block"
-                      style={{ width: 430, opacity: isOpen ? 1 : 0, transition: "opacity 0.26s ease" }}
-                    >
-                      <span className="block text-[12px] font-medium" style={{ color }}>
-                        {r.label}
-                      </span>
-                      <span className="mt-1 block text-[12px] leading-relaxed text-muted">{r.why}</span>
-                      {/* the real artifact this step produced — opens a back-
-                          reference to the chain it actually landed on */}
-                      {r.key === backend.receipt.stageKey &&
-                        lane.live &&
-                        lane.blobId && (
+                    {/* text only for the OPEN step — collapsed steps are icon-only,
+                        so the panel height hugs the open definition instead of being
+                        inflated by phantom text wrapped into a 26px column */}
+                    {isOpen && (
+                      <span className="block min-w-0 flex-1">
+                        <span className="block text-[12px] font-medium" style={{ color }}>
+                          {r.label}
+                        </span>
+                        <span className="mt-1 block text-[12px] leading-relaxed text-muted">{r.why}</span>
+                        {/* the real artifact this step produced — opens a back-
+                            reference to the chain it actually landed on */}
+                        {r.key === backend.receipt.stageKey && lane.live && lane.blobId && (
                           <Receipt
                             receipt={backend.receipt}
                             id={lane.blobId}
@@ -239,7 +230,8 @@ export function Lane({
                             color={color}
                           />
                         )}
-                    </span>
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -248,40 +240,26 @@ export function Lane({
         </div>
       </div>
 
-      {/* meta */}
-      <div className="mt-2 flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
-        <StatusTag lane={lane} winner={isWinner} />
-        {lane.segments != null && <span>· {lane.segments.toLocaleString()} txs</span>}
-        {lane.note && <span className="text-accent">· {lane.note}</span>}
-        {lane.error && <span className="text-red-500">· {lane.error}</span>}
-      </div>
+      {/* meta — only render when there's a real signal (live, winner, note,
+          error). The verbose "modeled · size · txs" line is intentionally
+          dropped so lanes stay compact and more bars fit on a phone screen. */}
+      {(lane.live === true || isWinner || lane.note || lane.error) && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
+          {lane.live === true && (
+            <span className="flex items-center gap-1">
+              <span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent)" }} />
+              live upload
+            </span>
+          )}
+          {isWinner && <span className="text-ink">fastest</span>}
+          {lane.note && <span className="text-accent">{lane.note}</span>}
+          {lane.error && <span className="text-red-500">{lane.error}</span>}
+        </div>
+      )}
     </div>
   );
 }
 
-function StatusTag({ lane, winner }: { lane: LaneState; winner: boolean }) {
-  const live = lane.live === true;
-  return (
-    <span className="flex items-center gap-1">
-      {live ? (
-        <>
-          <span
-            className="inline-block h-1.5 w-1.5 rounded-full"
-            style={{ background: "var(--accent)" }}
-          />
-          live upload
-        </>
-      ) : lane.sim ? (
-        `${lane.simTag ?? "modeled"}${lane.bytes != null ? ` · ${fmtSize(lane.bytes)}` : ""}`
-      ) : lane.status === "done" ? (
-        "modeled"
-      ) : (
-        ""
-      )}
-      {winner && <span className="text-ink">· fastest</span>}
-    </span>
-  );
-}
 
 // The real, verifiable thing the upload produced — a back-reference to the
 // chain (or store) it landed on. Links out to a block explorer where one exists.

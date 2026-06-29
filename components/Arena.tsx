@@ -133,6 +133,7 @@ export default function Arena() {
   const [, setTick] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const [modal, setModal] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false); // simulation info popover
   const [polling, setPolling] = useState(false); // a background Tapedrive job is running
   const runGen = useRef(0); // invalidates stale polls when a new run starts
 
@@ -460,19 +461,41 @@ export default function Arena() {
           </div>
         </div>
       ) : (
-        <div className="flex flex-col gap-4 rounded-lg border border-line bg-bg px-4 py-4">
+        <div className="flex flex-col gap-3 rounded-lg border border-line bg-bg px-4 py-3">
           <div className="flex items-center justify-between gap-3">
-            <div className="text-sm text-muted">
-              Extrapolates each network&apos;s recorded runs to{" "}
-              <span className="tnum font-mono text-ink">{fmtSize(simBytes)}</span>,
-              replayed in real time.
+            <div className="relative flex items-center gap-1.5 text-sm text-muted">
+              <span>
+                Simulate <span className="tnum font-mono text-ink">{fmtSize(simBytes)}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setInfoOpen((o) => !o)}
+                className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-line text-[10px] font-medium leading-none text-muted hover:border-ink/40 hover:text-ink"
+                aria-label="How the simulation works"
+              >
+                i
+              </button>
+              {infoOpen && (
+                <div className="absolute left-0 top-7 z-20 w-64 rounded-md border border-line bg-white p-2.5 text-[11px] leading-relaxed text-muted shadow-[0_4px_16px_-4px_rgba(0,0,0,0.18)]">
+                  {fitRuns > 0 ? (
+                    <>
+                      Replays each network&apos;s recorded runs at this size, in real time.
+                      Fit from <span className="text-ink">{fitRuns}</span> recorded run
+                      {fitRuns === 1 ? "" : "s"}, measured {fmtSize(fitMin)}–{fmtSize(fitMax)}.
+                      Beyond that range is extrapolated.
+                    </>
+                  ) : (
+                    "No runs recorded yet — run a live upload to seed the simulation."
+                  )}
+                </div>
+              )}
             </div>
             <button
               onClick={busy ? reset : runSim}
               className="inline-flex shrink-0 items-center gap-2 rounded-md bg-ink px-4 py-1.5 text-sm font-medium text-bg"
             >
               {busy ? <Close size={14} /> : <Play size={14} />}
-              {busy ? "Stop" : "Run simulation"}
+              {busy ? "Stop" : "Run upload"}
             </button>
           </div>
           {/* log-scaled size slider — 1 KB to 10 GB */}
@@ -487,7 +510,8 @@ export default function Arena() {
             className="arena-slider w-full"
             aria-label="Simulated file size"
           />
-          <div className="flex flex-wrap items-center gap-1.5">
+          {/* size presets — kept to a single row */}
+          <div className="flex items-center gap-1">
             {SIM_PRESETS.map((p) => {
               const active = Math.abs(simBytes - p.bytes) / p.bytes < 0.02;
               return (
@@ -495,7 +519,7 @@ export default function Arena() {
                   key={p.label}
                   onClick={() => !busy && setSimBytes(p.bytes)}
                   disabled={busy}
-                  className={`rounded-md border px-2.5 py-1 text-xs transition-colors disabled:opacity-40 ${
+                  className={`flex-1 whitespace-nowrap rounded-md border px-1 py-1 text-center text-xs transition-colors disabled:opacity-40 ${
                     active
                       ? "border-ink/40 bg-ink/[0.04] text-ink"
                       : "border-line text-muted hover:border-ink/30 hover:text-ink"
@@ -505,19 +529,6 @@ export default function Arena() {
                 </button>
               );
             })}
-          </div>
-          {/* honest data-availability readout — the sim is only as good as the
-              runs recorded near this size */}
-          <div className="text-[11px] text-muted">
-            {fitRuns > 0 ? (
-              <>
-                Fit from <span className="text-ink">{fitRuns}</span> recorded run
-                {fitRuns === 1 ? "" : "s"}, measured {fmtSize(fitMin)}–{fmtSize(fitMax)}.
-                Beyond that range is extrapolated.
-              </>
-            ) : (
-              "No runs recorded yet — run a live upload to seed the fit."
-            )}
           </div>
         </div>
       )}

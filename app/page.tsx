@@ -28,6 +28,17 @@ export default function Home() {
       </div>
       <Compare />
       <Faq />
+      <footer className="mt-10 border-t border-line pt-6 text-center text-[12px] text-muted sm:mt-12">
+        A tool from{" "}
+        <a
+          href="https://moment.xyz"
+          target="_blank"
+          rel="noreferrer"
+          className="font-medium text-ink underline-offset-2 hover:underline"
+        >
+          moment.xyz
+        </a>
+      </footer>
     </main>
   );
 }
